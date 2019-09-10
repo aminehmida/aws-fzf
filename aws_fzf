@@ -1,0 +1,246 @@
+FZF_PARAMS=(--height=30%)
+
+if [[ -z $EDITOR ]]; then
+    echo '$EDITOR env var not set. Some commands may not work correctly.'
+    echo 'You can set this variable by editing ~/.bashrc or ~/.zshrc and adding:'
+    echo 'export EDITOR=vim'
+    echo 'To use vim for example'
+fi
+
+if [[ $SHELL =~ "bash" ]]; then
+    function shellout() {
+        echo "This command will be executed:"
+        echo "$@"
+        echo "Type [y] to continue. Any other key to cancel."
+        read -n 1 c
+        if [[ $c = "y" ]]; then
+            sh -c "$@"
+        fi
+    }
+elif [[ $SHELL =~ "zsh" ]]; then
+    function shellout() {
+        print -z "$@"
+    }
+else
+    echo "Shell not supported"
+    return 1
+fi
+
+function aws-() {
+    local COMMANDS="aws-route53 | ssh, ping, curl, browse records from a hosted zone
+aws-logs | Use saw command line to get or watch logs of a specific log group
+aws-ssm | List ssm parameters
+aws-s3 | View, download, delete S3 objects
+aws-ec2 | start, stop, terminate EC2 instance"
+
+    shellout $(echo -e $COMMANDS | fzf $FZF_PARAMS | cut -d\| -f1)
+}
+
+function aws-route53() {
+    if [[ ! -z $1 ]]; then
+        local QUERY1="-q $1"
+    else
+        local QUERY1=""
+    fi
+
+    if [[ ! -z $2 ]]; then
+        local QUERY2="-q $2"
+    else
+        local QUERY2=""
+    fi
+
+    if [[ ! -z $3 ]]; then
+        local QUERY3="-q $3"
+    else
+        local QUERY3=""
+    fi
+
+    local ZONE
+    ZONE=$(aws route53 list-hosted-zones | jq '.HostedZones[] | "\(.Name),\(.Id)"' -r | fzf $FZF_PARAMS $QUERY1 --header="Select hosted zone")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+    echo $ZONE | cut -d, -f2
+
+    local RECORD
+    RECORD=$(aws route53 list-resource-record-sets --hosted-zone-id $ZONE | jq -r '.ResourceRecordSets[] | "\(.Name):\(.Type)"' | fzf $FZF_PARAMS $QUERY2 --header="Select record")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    RECORD=$(echo $RECORD |cut -d: -f1 | rev | cut -c 2- | rev)
+
+    local ACTION
+    ACTION=$(echo "echo - Print the record\nssh - ssh into the record\nping - Ping the record" | fzf $FZF_PARAMS $QUERY3 --header "Select action")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+
+    if [[ $ACTION =~ "echo" ]]; then
+        echo $RECORD
+    elif [[ $ACTION =~ "ssh" ]]; then
+        shellout "ssh ec2-user@$RECORD"
+    elif [[ $ACTION =~ "ping" ]]; then
+        ping $RECORD
+    fi
+}
+
+function aws-logs() {
+    if ! command -v saw &> /dev/null; then
+        echo "saw command line is not installed"
+        echo "Download it from: https://github.com/TylerBrock/saw"
+        return 1
+    fi
+
+    if [[ ! -z $1 ]]; then
+        local LOG_GROUP_QUERY="-q $1"
+    else
+        local LOG_GROUP_QUERY=""
+    fi
+
+    if [[ ! -z $2 ]]; then
+        local ACTION_QUERY="-q $2"
+    else
+        local ACTION_QUERY=""
+    fi
+
+    if [[ ! -z $3 ]]; then
+        local LOG_START_QUERY="-q $3"
+    else
+        local LOG_START_QUERY=""
+    fi
+
+    local LOG_GROUP
+    LOG_GROUP=$(saw groups | fzf $LOG_GROUP_QUERY $FZF_PARAMS --header "Select log group")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+
+    local ACTION
+    ACTION=$(echo "follow - follow logs\ndownload - download logs from one point in time and open in editor" | fzf $FZF_PARAMS $ACTION_QUERY --header="select action")
+    if [[ $? -ne 0 ]]; then
+        echo "action canceled"
+        return 1
+    fi
+
+    if [[ $ACTION =~ "follow" ]]; then
+        saw watch $LOG_GROUP
+    elif [[ $ACTION =~ "download" ]]; then
+        local LOG_START
+        LOG_START=$(echo "10m\n30m\n1h\n6h" | fzf $fzf_params $LOG_START_QUERY --header="Select start time to get logs")
+        if [[ $? -ne 0 ]]; then
+            echo "action canceled"
+            return 1
+        fi
+        shellout "saw get $LOG_GROUP --start -$LOG_START --pretty > /tmp/aws-logs.txt; $EDITOR /tmp/aws-logs.txt"
+    else
+        echo "No action selected"
+    fi
+}
+
+function aws-ec2() {
+    if [[ ! -z $1 ]]; then
+        local INSRANCE_QUERY="-q $1"
+    else
+        local INSRANCE_QUERY=""
+    fi
+
+    if [[ ! -z $2 ]]; then
+        local ACTION_QUERY="-q $2"
+    else
+        local ACTION_QUERY=""
+    fi
+
+    local INSTANCE_ID
+    INSTANCE_ID=$(aws ec2 describe-instances | jq -r '.Reservations[].Instances[] | "\(.InstanceId),\(.Tags[] | select(.Key == "Name") | .Value),\(.State.Name),\(.Placement.AvailabilityZone)"' | fzf $FZF_PARAMS $INSRANCE_QUERY --header="Select EC2 instance")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+    INSTANCE_ID=$(echo $INSTANCE_ID | cut -d, -f1)
+
+    local ACTION
+    ACTION=$(echo "start\nstop\nterminate" | fzf $FZF_PARAMS $ACTION_QUERY --header="Select action")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+
+    case "$ACTION" in
+    "start")
+        shellout "aws ec2 start-instances --instance-ids $INSTANCE_ID"
+        ;;
+    "stop")
+        shellout "aws ec2 stop-instances --instance-ids $INSTANCE_ID"
+        ;;
+    "terminate")
+        shellout "aws ec2 terminate-instances --instance-ids $INSTANCE_ID"
+        ;;
+    esac
+}
+
+function aws-s3(){
+    local S3PATH
+    S3PATH=$(aws s3 ls | fzf $FZF_PARAMS --header "Select bucket")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    S3PATH="s3://$(echo $S3PATH | awk '{print $(NF)}')/"
+
+    local S3SELECTION
+    while :
+    do
+        S3SELECTION=$(aws s3 ls $S3PATH)
+        S3SELECTION=$(echo ".. (navigate back)\n$S3SELECTION"| fzf $FZF_PARAMS --header "You are in $S3PATH Press ESC to finish")
+
+        if [[ $? -ne 0 ]]; then
+            break
+        fi
+        if [[ $S3SELECTION == ".. (navigate back)" ]]; then
+            echo "Nav back"
+            S3PATH="$(echo $S3PATH | rev | cut -d/ -f3- | rev)/"
+        else
+            S3PATH="$S3PATH$(echo $S3SELECTION | awk '{print $(NF)}')"
+        fi
+    done
+
+    echo $S3PATH
+    local FILENAME=$(echo $S3PATH | rev | cut -d/ -f1 | rev)
+    echo "File name $FILENAME"
+
+    local ACTION
+    ACTION=$(echo "View     - View file with $EDITOR\nDownload - Download in current directory\nDelete   - Delete object" | fzf $FZF_PARAMS --header "Select action")
+    if [[ $? -ne 0 ]]; then
+        echo "Action canceled"
+        return 1
+    fi
+
+    if [[ $ACTION =~ "View" ]]; then
+        shellout "aws s3 cp $S3PATH /tmp/; $EDITOR /tmp/$FILENAME"
+    elif [[ $ACTION =~ "Download" ]]; then
+        shellout "aws s3 cp $S3PATH ."
+    elif [[ $ACTION =~ "Download" ]]; then
+        shellout "aws s3 rm $S3PATH"
+    fi
+
+}
+
+function aws-ssm(){
+    local QUERY
+    if [[ $# -ge 1 ]]; then
+        QUERY="-q $@"
+    else
+        QUERY=""
+    fi
+
+    local PARAM
+    PARAM=$(aws ssm describe-parameters | jq -r '.Parameters[] | "\(.Name) \(.Type)"' | fzf $FZF_PARAMS $QUERY )
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    echo "$(aws ssm get-parameter --name $(echo $PARAM | cut -d' ' -f1) --with-decryption | jq -r '.Parameter.Value')"
+
+}
+
