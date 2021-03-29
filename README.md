@@ -1,7 +1,7 @@
 # The problem:
 
-When interaction with AWS web console, many times I find that it's very slow or have some strange limitation/inconsistencies.
-But, I always keep coming back to it because it's intuitive and the learning curve is almost non existing.
+When interacting with AWS web console, many times I find that it's very slow or have some strange limitation/inconsistencies.
+And I always keep coming back to it because it's intuitive and the learning curve is almost non existing.
 
 # What is this?
 
